@@ -68,11 +68,8 @@ Disable all Claude API calls. Everything stays in the browser tab.
 
 ## Screenshots
 
-> _Add screenshots here after running the app. Suggested captures:_
-> - Landing page with scope transparency panel
-> - Connected Apps tab showing app cards with risk badges
-> - File Inspector > Content tab showing Monaco JSON viewer
-> - Analytics dashboard with charts
+<img width="1459" height="761" alt="DriveVault" src="https://github.com/user-attachments/assets/47e8ad7e-50e4-4780-bb5b-c5c38333d7fb" />
+
 
 ---
 
