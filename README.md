@@ -69,7 +69,16 @@ Disable all Claude API calls. Everything stays in the browser tab.
 
 ## Setup & Run
 
-### 1. Get a Google OAuth Client ID
+### 1. Clone the Repository
+
+Clone the project from GitHub and navigate into the folder:
+
+```bash
+git clone https://github.com/satiricalguru/DriveVault.git
+cd DriveVault
+```
+
+### 2. Get a Google OAuth Client ID
 
 See the full walkthrough in [`docs/SETUP.md`](docs/SETUP.md) (or follow the setup instructions in the in-app configuration helper).
 
@@ -81,7 +90,7 @@ Short version:
 5. Add `http://localhost:5173` (or your staging/production domain) to **Authorized JavaScript Origins**.
 6. Copy the Client ID.
 
-### 2. Configure and Run
+### 3. Configure and Run
 
 Because DriveVault is a single-file static app, you can serve it with any lightweight server:
 
