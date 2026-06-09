@@ -40,6 +40,14 @@ DriveVault is a **single-file, zero-backend web app** that connects to your Goog
 
 ---
 
+## Screenshots
+
+<img width="2908" height="1502" alt="image" src="https://github.com/user-attachments/assets/798d3d6e-bc9f-4abc-87a6-9018970afd8d" />
+
+
+
+---
+
 ## Features
 
 ### 🔍 Connected Apps Auditor
