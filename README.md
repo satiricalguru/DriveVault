@@ -1,6 +1,6 @@
 # 🛡️ DriveVault — Connected App Data Extractor
 
-> Audit every app that touches your Google Drive. Inspect files, review permissions, detect sensitive data, and export evidence packages — all client-side, no backend required.
+> Audit every app that touches your Google Drive. Inspect files, review permissions, detect sensitive data, and export evidence packages — all client-side with a premium, zero-backend glassmorphic forensics console.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Status](https://img.shields.io/badge/status-active-brightgreen)
@@ -11,16 +11,17 @@
 
 ## What is DriveVault?
 
-Third-party apps connected to your Google account quietly write files to your Drive — sync states, backups, configs, tokens — without any visibility in the standard Google Drive UI. DriveVault surfaces all of it.
+Third-party apps connected to your Google account quietly write files to your Drive — sync states, backups, configs, tokens — without any visibility in the standard Google Drive UI. DriveVault surfaces all of it in a beautiful, premium security-themed dashboard.
 
 DriveVault is a **single-file, zero-backend web app** that connects to your Google account via OAuth 2.0 and lets you:
 
-- See every file that connected apps have written to your Drive
-- Inspect raw file content (JSON viewer, hex dump, image preview)
-- Audit which apps hold Drive permissions and what they've been doing
-- Detect files containing sensitive fields (tokens, emails, location, device IDs)
-- Export everything as a ZIP, CSV, or full JSON report
-- Monitor live changes (30-second poll via Drive Changes API)
+- **Audit Connected Apps:** View every file that connected apps have written to your Drive.
+- **Inspect Payloads:** Browse raw file contents using Monaco Editor for text/JSON, an inline image viewer, or a custom-built hex dump viewer for binary assets.
+- **Vulnerability Diagnostics:** Detect sensitive keys (passwords, sessions, coordinates, tokens) inside your files automatically.
+- **Export Evidence Packages:** Package selected logs or files into a ZIP export, a metadata CSV catalog, or a compiled JSON forensics report.
+- **Live Monitoring Log:** Watch for live creations and modifications on your Drive with a background watcher polling the Changes API.
+- **Custom settings manager:** Enter and save your Google Client ID and Anthropic Proxy URL directly in the browser's `localStorage` — no code edits required!
+- **Interactive simulated console:** Preview the entire forensic dashboard directly on the landing page before connecting.
 
 ---
 
@@ -40,86 +41,62 @@ DriveVault is a **single-file, zero-backend web app** that connects to your Goog
 ## Features
 
 ### 🔍 Connected Apps Auditor
-Groups all Drive files by the app that created or modified them. Each app card shows file count, storage used, last activity, permission level, and a risk score based on what sensitive metadata signals were found.
+Groups files by the app that created or modified them. Each app card features a custom risk badge, permission metadata, and stats (files count, storage audited, last activity date).
 
 ### 📁 File Explorer
-Browse all app-attributed files with a sidebar tree grouped by inferred app name. Select any file to open the inspector.
+Browse all app-attributed files with a tree-structured sidebar grouped by inferred app name. It supports real-time search, sorting, and type badge filters.
 
-### 🧪 File Inspector (3 tabs)
-- **Metadata** — File ID, MIME type, size, timestamps, `appProperties`, capabilities, full raw JSON
-- **Content** — Smart viewer: Monaco Editor for JSON/text, inline preview for images, hex dump for binary files. Detects sensitive field names automatically.
-- **Analysis** — Claude-powered forensic explanation of what the file is, what app wrote it, and privacy risks (requires proxy configuration; falls back to local heuristics)
+### 🧪 File Inspector
+- **Metadata** — File ID, MIME type, size, timestamps, `appProperties`, capabilities, and Monaco Editor raw JSON view.
+- **Content Tab** — Monaco Editor for text/JSON, inline image preview, and detailed custom hex viewer for binary files. It raises visual alerts if sensitive identifiers are scanned.
+- **AI Analysis** — Claude-powered forensic explanation of what the file is, what app wrote it, and privacy risks (requires proxy configuration; falls back to local heuristics terminal).
 
 ### 📊 Analytics Dashboard
-Donut chart of storage by app, bar chart of files per app, MIME type breakdown, largest files list, modification timeline.
+Donut chart of storage by app, bar chart of files per app, MIME type breakdown, list of largest files, and a modification timeline heatmap.
 
 ### 📦 Bulk Export
-- **Download ZIP** — all selected files + per-file metadata JSON + manifest
-- **Metadata CSV** — spreadsheet-ready file list
-- **Full JSON Report** — metadata + base64 content for text/JSON files
+- **Download ZIP** — all selected files + per-file metadata JSON + manifest.
+- **Metadata CSV** — spreadsheet-ready file list.
+- **Full JSON Report** — metadata + base64 content for text/JSON files.
 
 ### 🔴 Live Watcher
-Polls Drive every 30 seconds. Displays a live changes badge and a changes log when files are created or modified.
+Polls Drive every 30 seconds. Displays a live changes badge in the header and a real-time event log tab. Prevents selection reset on poll updates for a seamless user experience.
 
 ### 🔒 Privacy Mode
 Disable all Claude API calls. Everything stays in the browser tab.
 
 ---
 
-## Screenshots
-
-<img width="1459" height="761" alt="DriveVault" src="https://github.com/user-attachments/assets/47e8ad7e-50e4-4780-bb5b-c5c38333d7fb" />
-
-
----
-
-## Quick Start
+## Setup & Run
 
 ### 1. Get a Google OAuth Client ID
 
-See the full walkthrough in [`docs/SETUP.md`](docs/SETUP.md).
+See the full walkthrough in [`docs/SETUP.md`](docs/SETUP.md) (or follow the setup instructions in the in-app configuration helper).
 
 Short version:
 1. Go to [console.cloud.google.com](https://console.cloud.google.com)
-2. Create a project → enable **Google Drive API** and **Drive Activity API**
-3. OAuth consent screen → add the six scopes listed below
-4. **Credentials** → Create **OAuth 2.0 Client ID** → Web Application
-5. Add `http://localhost:5173` (or your domain) to **Authorized JavaScript Origins**
-6. Copy the Client ID
+2. Create a project → enable **Google Drive API** and **Drive Activity API**.
+3. OAuth consent screen → add the six scopes listed below.
+4. **Credentials** → Create **OAuth 2.0 Client ID** → Web Application.
+5. Add `http://localhost:5173` (or your staging/production domain) to **Authorized JavaScript Origins**.
+6. Copy the Client ID.
 
-### 2. Configure the App
+### 2. Configure and Run
 
-Open `index.html` and find this line near the top:
-
-```javascript
-window.DRIVEVAULT_CONFIG = {
-  googleClientId: "YOUR_GOOGLE_CLIENT_ID",
-  anthropicProxyUrl: "",
-};
-```
-
-Replace `YOUR_GOOGLE_CLIENT_ID` with your OAuth Client ID.
-
-### 3. Serve and Open
-
-DriveVault is a static single-file app. It must be served over HTTP (not opened as `file://`) because the Google OAuth library requires an origin.
+Because DriveVault is a single-file static app, you can serve it with any lightweight server:
 
 ```bash
-# Python (no install needed)
+# Start a simple Python server
 python3 -m http.server 5173
-
-# Node.js
-npx serve . -p 5173
-
-# VS Code
-# Use the "Live Server" extension, then open index.html
 ```
 
-Then visit [http://localhost:5173](http://localhost:5173).
+Then:
+1. Visit [http://localhost:5173](http://localhost:5173).
+2. Click **Configuration Setup** (or the gear icon).
+3. Paste your Google OAuth Client ID and save. Credentials will be safely persisted in your browser's local storage.
+4. Click **Connect Google Account** to authorize and begin scanning!
 
-### 4. Connect Your Google Account
-
-Click **Connect Google Account**, sign in, and approve the requested scopes. DriveVault will begin scanning your Drive immediately.
+*Alternatively, you can open `index.html` and hardcode your client ID into `window.DRIVEVAULT_CONFIG.googleClientId`.*
 
 ---
 
@@ -136,25 +113,11 @@ Click **Connect Google Account**, sign in, and approve the requested scopes. Dri
 
 ---
 
-## Optional: Claude Analysis
-
-The **Analysis** tab in the File Inspector can explain what any file contains, which app likely wrote it, and flag privacy risks. This feature calls the Anthropic API, but browsers cannot hold a secret API key safely.
-
-You have two options:
-
-**Option A — Deploy a simple proxy** (recommended)  
-Create a tiny server that accepts `{ model, system, prompt, stream }` and forwards to `https://api.anthropic.com/v1/messages` with your secret key. Set `anthropicProxyUrl` in `DRIVEVAULT_CONFIG` to your proxy URL.
-
-**Option B — Skip it**  
-Leave `anthropicProxyUrl` empty. The Analysis tab falls back to a local heuristic scan (no API call, fully offline).
-
----
-
 ## Security & Privacy
 
 - **No backend.** DriveVault is 100% client-side JavaScript.
-- **Token in memory only.** The Google access token is never written to `localStorage`, `sessionStorage`, or cookies. It lives only in the JS runtime and is gone when you close the tab.
-- **No data leaves your browser** except for requests directly to Google's APIs (and Anthropic's API if analysis is configured).
+- **Token in memory only.** The Google access token is never written to local storage, cookies, or session cache. It exists only in the active JS runtime heap and vanishes when you close the tab.
+- **No data leaves your browser** except for requests directly to Google's APIs (and Anthropic's API if analysis proxy is configured).
 - **Disconnect at any time.** Click Disconnect and the token is cleared. You can also revoke DriveVault's Google permission at [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
 
 ---
@@ -164,15 +127,15 @@ Leave `anthropicProxyUrl` empty. The Analysis tab falls back to a local heuristi
 | Layer | Technology |
 |---|---|
 | Framework | React 18 (Babel standalone, no build step) |
-| Styling | Tailwind CSS (CDN) |
+| Styling | Tailwind CSS (CDN) + Glassmorphism system |
 | Auth | Google Identity Services (GSI) token client flow |
-| Drive API | Google Drive API v3 (raw `fetch`) |
+| Drive API | Google Drive API v3 (raw `fetch` with backoff) |
 | Activity API | Google Drive Activity API v2 |
 | Code Viewer | Monaco Editor (CDN) |
 | Charts | Chart.js (CDN) |
 | Export | JSZip (CDN) |
 | Fonts | JetBrains Mono + Space Grotesk (Google Fonts) |
-| AI Analysis | Anthropic API via user-configured proxy |
+| Icons | Inlined SVG component library |
 
 ---
 
@@ -181,8 +144,6 @@ Leave `anthropicProxyUrl` empty. The Analysis tab falls back to a local heuristi
 ```
 DriveVault/
 ├── index.html        # The entire application — one file
-├── docs/
-│   └── SETUP.md      # Detailed Google Cloud Console setup guide
 ├── README.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
@@ -191,21 +152,6 @@ DriveVault/
 
 ---
 
-## Contributing
-
-Pull requests are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for guidelines.
-
----
-
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
-
----
-
-## Acknowledgements
-
-- [Google Drive API v3 docs](https://developers.google.com/workspace/drive/api/reference/rest/v3)
-- [Google Drive Activity API docs](https://developers.google.com/drive/activity)
-- [Google Identity Services](https://developers.google.com/identity/oauth2/web/guides/overview)
-- [Anthropic Claude API](https://docs.anthropic.com)
