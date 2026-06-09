@@ -2,6 +2,8 @@
 
 > Audit every app that touches your Google Drive. Inspect files, review permissions, detect sensitive data, and export evidence packages — all client-side with a premium, zero-backend glassmorphic forensics console.
 
+🚀 **Live Deployment:** [https://satiricalguru.github.io/DriveVault/](https://satiricalguru.github.io/DriveVault/)
+
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Status](https://img.shields.io/badge/status-active-brightgreen)
 ![No Backend](https://img.shields.io/badge/backend-none-green)
