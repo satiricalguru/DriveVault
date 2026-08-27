@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0a121e" />
+      <stop offset="100%" stop-color="#05070a" />
+    </linearGradient>
+    <linearGradient id="cyanGrad" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22d3ee" />
+      <stop offset="100%" stop-color="#06b6d4" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#06b6d4" flood-opacity="0.35" />
+    </filter>
+  </defs>
+  <!-- Rounded Base Card -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bgGrad)" stroke="#06b6d4" stroke-opacity="0.3" stroke-width="2" />
+  <g filter="url(#glow)">
+    <!-- Vault Shackle -->
+    <path d="M38 56v-14c0-14.36 11.64-26 26-26s26 11.64 26 26v14" stroke="#10b981" stroke-width="8" stroke-linecap="round" />
+    <!-- Vault Body -->
+    <rect x="24" y="52" width="80" height="60" rx="14" stroke="url(#cyanGrad)" stroke-width="8" fill="#0b131f" />
+    <!-- Keyhole / Core -->
+    <circle cx="64" cy="76" r="6" fill="#ffffff" />
+    <path d="M64 80v14" stroke="#ffffff" stroke-width="7" stroke-linecap="round" />
+  </g>
+</svg>

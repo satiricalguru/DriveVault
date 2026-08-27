@@ -18,7 +18,7 @@ DriveVault is designed with privacy as a first principle:
 If you discover a security vulnerability in DriveVault, please report it responsibly:
 
 1. **Do not open a public GitHub issue** for security vulnerabilities.
-2. Email the maintainer directly (add contact info here), or use GitHub's private security advisory feature:
+2. Use GitHub's private security advisory feature:
    - Go to the **Security** tab of this repository
    - Click **Report a vulnerability**
 3. Include:

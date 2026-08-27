@@ -8,18 +8,14 @@
     Then visit http://localhost:5173
 
   Google OAuth setup:
-    1. Go to https://console.cloud.google.com
-    2. Create a project, then enable "Google Drive API" and "Drive Activity API".
-    3. Configure OAuth consent and add these scopes:
-       - https://www.googleapis.com/auth/drive.appdata
-       - https://www.googleapis.com/auth/drive.metadata.readonly
-       - https://www.googleapis.com/auth/drive.readonly
-       - https://www.googleapis.com/auth/drive.activity.readonly
-       - https://www.googleapis.com/auth/userinfo.profile
-       - https://www.googleapis.com/auth/userinfo.email
-    4. Credentials -> Create OAuth 2.0 Client ID -> Web Application.
-    5. Add your domain, for example http://localhost:5173, to Authorized JavaScript origins.
-    6. Replace YOUR_GOOGLE_CLIENT_ID below with that OAuth client ID, or configure it dynamically in the UI.
+    See docs/SETUP.md for complete Google Cloud Console walkthrough.
+    Required scopes:
+      - https://www.googleapis.com/auth/drive.appdata
+      - https://www.googleapis.com/auth/drive.metadata.readonly
+      - https://www.googleapis.com/auth/drive.readonly
+      - https://www.googleapis.com/auth/drive.activity.readonly
+      - https://www.googleapis.com/auth/userinfo.profile
+      - https://www.googleapis.com/auth/userinfo.email
 
   Important Google Drive limitation:
     appDataFolder is isolated per OAuth application. DriveVault can audit files apps saved
@@ -30,7 +26,7 @@
   Optional Claude analysis:
     Browsers should not call Anthropic directly with a secret API key. Set
     window.DRIVEVAULT_CONFIG.anthropicProxyUrl to your own authenticated proxy endpoint
-    that accepts { system, prompt, model, stream } and returns text/event-stream.
+    that accepts { system, prompt, model, stream } and returns text/event-stream or JSON.
 -->
 <html lang="en">
   <head>
@@ -171,7 +167,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-      const { useEffect, useMemo, useReducer, useRef, useState } = React;
+      const { useEffect, useMemo, useReducer, useRef, useState, useCallback } = React;
 
       const SCOPES = [
         "https://www.googleapis.com/auth/drive.appdata",
@@ -212,7 +208,30 @@
         "credit",
         "card",
         "account",
+        "bearer",
+        "private_key",
       ];
+
+      const CONSUMER_DOMAINS = new Set([
+        "gmail.com",
+        "googlemail.com",
+        "google.com",
+        "outlook.com",
+        "hotmail.com",
+        "live.com",
+        "msn.com",
+        "yahoo.com",
+        "ymail.com",
+        "icloud.com",
+        "me.com",
+        "mac.com",
+        "proton.me",
+        "protonmail.com",
+        "aol.com",
+        "zoho.com",
+        "gmx.com",
+        "mail.com",
+      ]);
 
       // Reusable Custom SVG Icon Component
       function Icon({ name, className = "w-5 h-5", glow = false }) {
@@ -353,33 +372,54 @@
       function iconForMime(mime = "", name = "") {
         const lower = `${mime} ${name}`.toLowerCase();
         if (lower.includes("json")) return { label: "JSON", color: "bg-sky-400/10 text-sky-400 border-sky-400/20" };
-        if (lower.startsWith("text/") || /\.(txt|md|csv|log|xml|yaml|yml)$/i.test(name)) return { label: "TXT", color: "bg-emerald-400/10 text-emerald-400 border-emerald-400/20" };
+        if (lower.startsWith("text/") || /\.(txt|md|csv|log|xml|yaml|yml|ini|cfg)$/i.test(name)) return { label: "TXT", color: "bg-emerald-400/10 text-emerald-400 border-emerald-400/20" };
         if (lower.startsWith("image/")) return { label: "IMG", color: "bg-fuchsia-400/10 text-fuchsia-400 border-fuchsia-400/20" };
-        if (lower.includes("octet") || lower.includes("binary")) return { label: "BIN", color: "bg-amber-400/10 text-amber-400 border-amber-400/20" };
-        return { label: "FILE", color: "bg-slate-400/10 text-slate-400 border-slate-400/20" };
+        if (lower.includes("octet") || lower.includes("binary") || /\.(db|sqlite|sqlite3|dat|bin|bak)$/i.test(name)) return { label: "BIN", color: "bg-amber-400/10 text-amber-400 border-amber-400/20" };
+        return { label: "FILE", color: "bg-slate-400/10 text-slate-300 border-slate-400/20" };
       }
 
       function inferAppName(file) {
         if (file.source === "appDataFolder") return "DriveVault AppDataFolder";
         const props = file.appProperties || {};
-        const modifierEmail = file.lastModifyingUser?.emailAddress || file.sharingUser?.emailAddress || file.owners?.[0]?.emailAddress;
-        const candidates = [
+        
+        // 1. Explicit app metadata properties
+        const explicitCandidates = [
           props.app,
           props.appName,
           props.application,
           props.package,
           props.bundle,
           props.client,
-          file.description,
-          modifierEmail && !modifierEmail.endsWith("@gmail.com") ? modifierEmail : "",
-          modifierEmail ? modifierEmail.split("@")[1] : "",
         ].filter(Boolean);
-        if (candidates.length) return String(candidates[0]).slice(0, 60);
-        const cleaned = (file.name || "Unknown App Data")
-          .replace(/\.(json|txt|bin|db|sqlite|xml|bak|dat|cfg|config|log)$/i, "")
-          .replace(/[_-]?(settings|config|backup|state|sync|data|prefs|preferences)$/i, "")
-          .replace(/[_-]+/g, " ")
-          .trim();
+        if (explicitCandidates.length) return String(explicitCandidates[0]).slice(0, 60);
+
+        // 2. Service accounts or third-party actor domains (excluding standard webmails)
+        const modifierEmail = file.lastModifyingUser?.emailAddress || file.sharingUser?.emailAddress || file.owners?.[0]?.emailAddress;
+        if (modifierEmail) {
+          const domain = modifierEmail.split("@")[1]?.toLowerCase();
+          if (domain && !CONSUMER_DOMAINS.has(domain)) {
+            if (domain.endsWith("gserviceaccount.com")) {
+              const saName = modifierEmail.split("@")[0];
+              return saName.replace(/[-_.]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).slice(0, 50);
+            }
+            return domain;
+          }
+        }
+
+        // 3. Short description if declared like a tag
+        if (file.description && file.description.length <= 40 && !file.description.includes(".") && !file.description.includes("/")) {
+          return file.description.trim();
+        }
+
+        // 4. File name heuristics
+        let cleaned = (file.name || "Unknown App Data").replace(/\.[a-z0-9]+$/i, "");
+        cleaned = cleaned.replace(/[-_.]?(\d{4}[-_.]?\d{2}[-_.]?\d{2}|\d{8,})$/i, "");
+        const kwRegex = /[-_.]?(settings|config|backup|state|sync|data|prefs|preferences|dump|export|session|store|cache)$/i;
+        while (kwRegex.test(cleaned)) {
+          cleaned = cleaned.replace(kwRegex, "");
+        }
+        cleaned = cleaned.replace(/[-_.]+/g, " ").trim();
+
         return cleaned || "Unattributed App Data";
       }
 
@@ -419,7 +459,7 @@
           name: "DriveVault OAuth Client",
           files: appDataFiles,
           size: appDataFiles.reduce((sum, file) => sum + Number(file.size || 0), 0),
-          lastModified: appDataFiles.map((file) => file.modifiedTime).sort().at(-1),
+          lastModified: appDataFiles.map((file) => file.modifiedTime).sort().at(-1) || "",
           permission: scopes.includes("https://www.googleapis.com/auth/drive.appdata") ? "Appdata-only + granted audit scopes" : "Current OAuth token",
           risk: scopes.some((scope) => scope.includes("drive.readonly")) ? "Medium" : "Low",
           riskSignals: [],
@@ -469,10 +509,14 @@
 
       async function fetchWithBackoff(url, options = {}, retries = 4) {
         for (let attempt = 0; attempt <= retries; attempt += 1) {
-          const res = await fetch(url, options);
-          if (![429, 503].includes(res.status)) return res;
-          if (attempt === retries) return res;
-          await new Promise((resolve) => setTimeout(resolve, Math.pow(2, attempt) * 700 + Math.random() * 250));
+          try {
+            const res = await fetch(url, options);
+            if (![429, 503].includes(res.status)) return res;
+            if (attempt === retries) return res;
+          } catch (err) {
+            if (attempt === retries) throw err;
+          }
+          await new Promise((resolve) => setTimeout(resolve, Math.pow(2, attempt) * 600 + Math.random() * 200));
         }
       }
 
@@ -619,17 +663,16 @@
       function reducer(state, action) {
         switch (action.type) {
           case "AUTH":
-            return { ...state, token: action.token, profile: action.profile };
+            return { ...state, token: action.token, profile: action.profile, error: "" };
           case "LOGOUT":
             return { ...initialState, privacySeen: state.privacySeen };
           case "LOADING":
             return { ...state, loading: action.value, error: "" };
           case "ERROR":
             return { ...state, loading: false, error: action.error };
-          case "FILES":
+          case "FILES": {
             const combinedFiles = [...action.driveFiles, ...action.appDataFiles];
-            // Fix selection reset on background watcher poll updates
-            const prevSelectedExists = combinedFiles.some(f => f.id === state.selectedFileId);
+            const prevSelectedExists = combinedFiles.some((f) => f.id === state.selectedFileId);
             return {
               ...state,
               driveFiles: action.driveFiles,
@@ -643,14 +686,16 @@
               loading: false,
               error: "",
             };
+          }
           case "SELECT_FILE":
             return { ...state, selectedFileId: action.id, activeTab: "metadata" };
           case "TAB":
             return { ...state, activeTab: action.tab };
-          case "TOGGLE":
+          case "TOGGLE": {
             const selected = new Set(state.selectedIds);
             selected.has(action.id) ? selected.delete(action.id) : selected.add(action.id);
             return { ...state, selectedIds: selected };
+          }
           case "SELECT_ALL":
             return { ...state, selectedIds: action.checked ? new Set(action.ids || state.files.map((file) => file.id)) : new Set() };
           case "CONTENT":
@@ -714,8 +759,17 @@
         });
 
         const tokenClient = useRef(null);
+        const filesRef = useRef(state.files);
+        filesRef.current = state.files;
+
         const selectedFile = state.files.find((file) => file.id === state.selectedFileId);
         const selectedFiles = state.files.filter((file) => state.selectedIds.has(file.id));
+
+        const handleConnect = useCallback(() => {
+          if (tokenClient.current) {
+            tokenClient.current.requestAccessToken({ prompt: "consent" });
+          }
+        }, []);
 
         // Re-initialize GSI token client if clientId changes
         useEffect(() => {
@@ -728,7 +782,7 @@
                 prompt: "consent",
                 callback: async (response) => {
                   if (response.error) {
-                    dispatch({ type: "ERROR", error: response.error });
+                    dispatch({ type: "ERROR", error: `OAuth Error: ${response.error_description || response.error}` });
                     return;
                   }
                   try {
@@ -754,13 +808,14 @@
           };
         }, [clientId]);
 
+        // Background Live Watcher Polling
         useEffect(() => {
           if (!state.token) return;
           const timer = setInterval(async () => {
             try {
               const [freshDrive, freshAppData] = await Promise.all([listAllDriveFiles(state.token), listAllAppData(state.token)]);
               const fresh = [...freshDrive, ...freshAppData];
-              const known = new Map(state.files.map((file) => [file.id, file.modifiedTime]));
+              const known = new Map(filesRef.current.map((file) => [file.id, file.modifiedTime]));
               const changed = fresh.filter((file) => known.get(file.id) && known.get(file.id) !== file.modifiedTime);
               const created = fresh.filter((file) => !known.has(file.id));
               if (created.length || changed.length) {
@@ -782,11 +837,11 @@
                 });
               }
             } catch (error) {
-              console.warn("Watcher poll failed", error);
+              console.warn("Watcher poll skipped/failed", error);
             }
           }, 30000);
           return () => clearInterval(timer);
-        }, [state.token, state.files]);
+        }, [state.token]);
 
         async function refreshFiles(token = state.token) {
           dispatch({ type: "LOADING", value: true });
@@ -817,11 +872,12 @@
           });
         }, [state.groups, appQuery, sortBy]);
 
-        const visibleFiles = selectedApp
-          ? state.groups.find((group) => group.name === selectedApp)?.files || []
-          : state.primaryTab === "appdata"
-            ? state.appDataFiles
-            : state.files;
+        const visibleFiles = useMemo(() => {
+          if (selectedApp) {
+            return state.groups.find((group) => group.name === selectedApp)?.files || [];
+          }
+          return state.primaryTab === "appdata" ? state.appDataFiles : state.files;
+        }, [selectedApp, state.groups, state.primaryTab, state.appDataFiles, state.files]);
 
         const handleSaveSettings = (newClientId, newProxyUrl) => {
           localStorage.setItem("drivevault_client_id", newClientId);
@@ -835,7 +891,7 @@
           return (
             <div className="relative min-h-screen">
               <Landing
-                onConnect={() => tokenClient.current?.requestAccessToken({ prompt: "consent" })}
+                onConnect={handleConnect}
                 oauthReady={Boolean(tokenClient.current)}
                 clientConfigured={clientId && clientId !== "YOUR_GOOGLE_CLIENT_ID"}
                 privacySeen={state.privacySeen}
@@ -853,9 +909,12 @@
                 onSave={handleSaveSettings}
               />
               {state.notice && <Toast tone="notice" message={state.notice} onClose={() => dispatch({ type: "NOTICE", notice: "" })} />}
+              {state.error && <Toast tone="error" message={state.error} onClose={() => dispatch({ type: "ERROR", error: "" })} />}
             </div>
           );
         }
+
+        const isTokenExpired = state.error && state.error.includes("expired");
 
         return (
           <div className="min-h-screen grid-bg">
@@ -871,7 +930,15 @@
               onOpenSettings={() => setShowSettings(true)}
             />
             
-            {state.error && <Toast tone="error" message={state.error} onClose={() => dispatch({ type: "ERROR", error: "" })} />}
+            {state.error && (
+              <Toast
+                tone="error"
+                message={state.error}
+                onClose={() => dispatch({ type: "ERROR", error: "" })}
+                onAction={isTokenExpired ? handleConnect : undefined}
+                actionLabel={isTokenExpired ? "Reconnect Now" : undefined}
+              />
+            )}
             {state.notice && <Toast tone="notice" message={state.notice} onClose={() => dispatch({ type: "NOTICE", notice: "" })} />}
             
             <main className="mx-auto max-w-[1800px] p-4 lg:p-6 space-y-6">
@@ -930,14 +997,14 @@
                       />
                     )}
                     <BulkToolbar
-                      files={state.primaryTab === "appdata" ? state.appDataFiles : state.files}
+                      files={visibleFiles}
                       selectedFiles={selectedFiles}
                       selectedCount={state.selectedIds.size}
                       progress={state.progress}
                       onSelectAll={(checked, ids) => dispatch({ type: "SELECT_ALL", checked, ids })}
-                      onZip={() => bulkZip(state, dispatch)}
+                      onZip={() => bulkZip(state, dispatch, visibleFiles)}
                       onCsv={() => exportCsv(selectedFiles.length ? selectedFiles : visibleFiles)}
-                      onReport={() => exportReport(state, dispatch)}
+                      onReport={() => exportReport(state, dispatch, visibleFiles)}
                       onDelete={() => bulkDelete(state, dispatch, refreshFiles)}
                     />
                     <div className="grid gap-6 xl:grid-cols-[minmax(300px,420px)_1fr]">
@@ -983,17 +1050,26 @@
           setTempProxyUrl(proxyUrl);
         }, [clientId, proxyUrl, isOpen]);
 
+        useEffect(() => {
+          if (!isOpen) return;
+          const handleKeyDown = (e) => {
+            if (e.key === "Escape") onClose();
+          };
+          window.addEventListener("keydown", handleKeyDown);
+          return () => window.removeEventListener("keydown", handleKeyDown);
+        }, [isOpen, onClose]);
+
         if (!isOpen) return null;
 
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-fade-in">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-fade-in" role="dialog" aria-modal="true">
             <div className="w-full max-w-lg rounded-3xl border border-vault-line bg-slate-900 p-6 shadow-glow border border-vault-line/40">
               <div className="flex items-center justify-between border-b border-vault-line/30 pb-4">
                 <div className="flex items-center gap-2">
                   <Icon name="settings" className="w-5 h-5 text-vault-cyan animate-pulse" />
                   <h3 className="text-xl font-bold text-white font-sans">DriveVault Configuration</h3>
                 </div>
-                <button onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:bg-white/10 hover:text-white transition">
+                <button onClick={onClose} aria-label="Close configuration modal" className="rounded-lg p-1 text-slate-400 hover:bg-white/10 hover:text-white transition">
                   <Icon name="close" className="w-5 h-5" />
                 </button>
               </div>
@@ -1009,7 +1085,7 @@
                     className="w-full rounded-xl bg-black/30 border border-vault-line/40 px-4 py-3 text-sm text-white focus:border-vault-cyan outline-none transition"
                   />
                   <p className="mt-1.5 text-[11px] text-slate-400 leading-relaxed">
-                    Set up a client in the Google Cloud Console. Set Authorized Origins to matching domains (e.g. <code>http://localhost:5173</code>).
+                    Set up a client in the Google Cloud Console. Set Authorized Origins to matching domains (e.g. <code>http://localhost:5173</code>). See <a href="docs/SETUP.md" target="_blank" className="text-vault-cyan underline">docs/SETUP.md</a>.
                   </p>
                 </div>
 
@@ -1023,7 +1099,7 @@
                     className="w-full rounded-xl bg-black/30 border border-vault-line/40 px-4 py-3 text-sm text-white focus:border-vault-cyan outline-none transition"
                   />
                   <p className="mt-1.5 text-[11px] text-slate-400 leading-relaxed">
-                    A proxy that appends Anthropic API secret keys. Leave blank to run fully offline local forensic heuristics.
+                    A secure proxy that relays requests to Anthropic. Leave blank to run fully offline local forensic heuristics.
                   </p>
                 </div>
               </div>
@@ -1159,6 +1235,7 @@
                       href="https://myaccount.google.com/permissions"
                       target="_blank"
                       rel="noreferrer"
+                      aria-label={`Revoke permissions for ${app.name} on Google`}
                       className="rounded-xl border border-vault-line/60 hover:border-vault-amber hover:bg-vault-amber/5 px-4 py-2.5 text-sm font-medium text-slate-300 hover:text-amber-200 transition-all duration-200 active:scale-95"
                       title="Opens Google's official permissions console."
                     >
@@ -1210,7 +1287,7 @@
       function MiniMetric({ label, value }) {
         return (
           <div className="rounded-xl border border-vault-line/10 bg-black/20 p-2.5">
-            <div className="font-mono text-[9px] uppercase tracking-wider text-slate-500">{label}</div>
+            <div className="font-mono text-[9px] uppercase tracking-wider text-slate-400">{label}</div>
             <div className="mt-1 truncate text-xs font-semibold text-slate-200">{value}</div>
           </div>
         );
@@ -1218,9 +1295,9 @@
 
       function InfoTooltip({ text }) {
         return (
-          <span className="group relative inline-grid h-5 w-5 place-items-center rounded-full border border-vault-cyan/30 text-[10px] text-vault-cyan font-mono cursor-help">
+          <span className="group relative inline-grid h-5 w-5 place-items-center rounded-full border border-vault-cyan/30 text-[10px] text-vault-cyan font-mono cursor-help" tabIndex={0} aria-label={text}>
             i
-            <span className="pointer-events-none absolute left-0 top-6 z-20 hidden w-64 rounded-xl border border-vault-line/60 bg-slate-900 p-2.5 text-left text-xs leading-relaxed text-slate-300 shadow-glow group-hover:block font-sans">
+            <span className="pointer-events-none absolute left-0 top-6 z-20 hidden w-64 rounded-xl border border-vault-line/60 bg-slate-900 p-2.5 text-left text-xs leading-relaxed text-slate-300 shadow-glow group-hover:block group-focus:block font-sans">
               {text}
             </span>
           </span>
@@ -1253,8 +1330,8 @@
 
       function Footer() {
         return (
-          <footer className="glass-panel rounded-2xl p-4 text-center text-[11px] text-slate-500 font-mono">
-            DriveVault is a client-side execution environment. Scopes tokens reside only in active memory. Data is dispatched solely to official Google REST APIs, and Anthropic proxy servers if configured.
+          <footer className="glass-panel rounded-2xl p-4 text-center text-[11px] text-slate-400 font-mono">
+            DriveVault is a client-side execution environment. OAuth tokens reside only in active memory. Data is dispatched solely to official Google REST APIs, and Anthropic proxy servers if configured.
           </footer>
         );
       }
@@ -1311,7 +1388,7 @@
                       <Icon name="info" className="w-5 h-5 text-vault-amber shrink-0 animate-pulse" />
                       <div>
                         <span className="font-semibold">Google OAuth Not Configured: </span>
-                        Replace <code>googleClientId</code> in settings with your Google Console OAuth Client ID to connect. Click <b>Configuration Setup</b> above to configure it.
+                        Configure your Google Cloud OAuth Client ID to connect. Click <b>Configuration Setup</b> above or view <a href="docs/SETUP.md" target="_blank" className="underline font-semibold">docs/SETUP.md</a>.
                       </div>
                     </div>
                   )}
@@ -1344,7 +1421,7 @@
                             <span className="h-1.5 w-1.5 rounded-full bg-vault-red"></span>
                             SuperBackup Pro
                           </div>
-                          <div className="text-[10px] text-slate-500 font-mono mt-0.5">Read-write permission detected</div>
+                          <div className="text-[10px] text-slate-400 font-mono mt-0.5">Read-write permission detected</div>
                         </div>
                         <span className="rounded-full bg-vault-red/10 border border-vault-red/20 px-2.5 py-0.5 font-mono text-[10px] text-vault-red font-semibold">High Risk</span>
                       </div>
@@ -1355,7 +1432,7 @@
                             <span className="h-1.5 w-1.5 rounded-full bg-vault-amber"></span>
                             WhatsApp Sync Service
                           </div>
-                          <div className="text-[10px] text-slate-500 font-mono mt-0.5">Files written: backups</div>
+                          <div className="text-[10px] text-slate-400 font-mono mt-0.5">Files written: backups</div>
                         </div>
                         <span className="rounded-full bg-vault-amber/10 border border-vault-amber/20 px-2.5 py-0.5 font-mono text-[10px] text-vault-amber font-semibold">Medium Risk</span>
                       </div>
@@ -1366,7 +1443,7 @@
                             <span className="h-1.5 w-1.5 rounded-full bg-vault-green"></span>
                             DriveVault AppDataFolder
                           </div>
-                          <div className="text-[10px] text-slate-500 font-mono mt-0.5">Isolated credentials state</div>
+                          <div className="text-[10px] text-slate-400 font-mono mt-0.5">Isolated credentials state</div>
                         </div>
                         <span className="rounded-full bg-vault-green/10 border border-vault-green/20 px-2.5 py-0.5 font-mono text-[10px] text-vault-green font-semibold">Low Risk</span>
                       </div>
@@ -1391,8 +1468,8 @@
               </div>
             </div>
             
-            <div className="mx-auto w-full max-w-[1400px] px-4 py-6 text-center text-xs text-slate-600 font-mono border-t border-vault-line/10">
-              DriveVault Forensics Engine v1.2.0 • 100% Client-Side Web Application
+            <div className="mx-auto w-full max-w-[1400px] px-4 py-6 text-center text-xs text-slate-500 font-mono border-t border-vault-line/10">
+              DriveVault Forensics Engine v1.2.1 • 100% Client-Side Web Application
             </div>
           </div>
         );
@@ -1418,16 +1495,16 @@
                 )}
                 
                 <label className="flex items-center gap-2 rounded-xl border border-vault-line/40 bg-black/20 px-3 py-2 text-[11px] text-slate-300 font-mono select-none cursor-pointer">
-                  <input type="checkbox" checked={privacyMode} onChange={(event) => onPrivacyMode(event.target.checked)} className="cursor-pointer rounded border-vault-line" />
+                  <input type="checkbox" checked={privacyMode} onChange={(event) => onPrivacyMode(event.target.checked)} className="cursor-pointer rounded border-vault-line accent-cyan-500" />
                   Privacy Mode
                 </label>
 
-                <button onClick={onRefresh} className="rounded-xl border border-vault-line/60 bg-black/20 px-3 py-2 text-xs text-slate-200 hover:border-vault-cyan/50 hover:bg-white/5 transition flex items-center gap-1.5 active:scale-95">
+                <button onClick={onRefresh} aria-label="Refresh indexed files from Google Drive" className="rounded-xl border border-vault-line/60 bg-black/20 px-3 py-2 text-xs text-slate-200 hover:border-vault-cyan/50 hover:bg-white/5 transition flex items-center gap-1.5 active:scale-95">
                   <Icon name="refresh" className="w-3.5 h-3.5" />
                   Refresh
                 </button>
 
-                <button onClick={onOpenSettings} className="rounded-xl border border-vault-line/60 bg-black/20 px-3 py-2 text-xs text-slate-200 hover:border-vault-cyan/50 hover:bg-white/5 transition flex items-center gap-1.5 active:scale-95">
+                <button onClick={onOpenSettings} aria-label="Open settings configuration" className="rounded-xl border border-vault-line/60 bg-black/20 px-3 py-2 text-xs text-slate-200 hover:border-vault-cyan/50 hover:bg-white/5 transition flex items-center gap-1.5 active:scale-95">
                   <Icon name="settings" className="w-3.5 h-3.5" />
                   Settings
                 </button>
@@ -1442,11 +1519,11 @@
                   )}
                   <div className="hidden sm:block text-left">
                     <div className="text-xs font-semibold text-white leading-none">{profile?.name}</div>
-                    <div className="text-[9px] text-slate-500 font-mono mt-0.5">{profile?.email}</div>
+                    <div className="text-[9px] text-slate-400 font-mono mt-0.5">{profile?.email}</div>
                   </div>
                 </div>
 
-                <button onClick={onDisconnect} className="rounded-xl border border-vault-red/30 bg-vault-red/10 px-3 py-2 text-xs text-red-200 hover:bg-vault-red/20 transition flex items-center gap-1.5 active:scale-95">
+                <button onClick={onDisconnect} aria-label="Disconnect Google account" className="rounded-xl border border-vault-red/30 bg-vault-red/10 px-3 py-2 text-xs text-red-200 hover:bg-vault-red/20 transition flex items-center gap-1.5 active:scale-95">
                   <Icon name="logout" className="w-3.5 h-3.5" />
                   Disconnect
                 </button>
@@ -1464,6 +1541,7 @@
                 <h2 className="font-bold text-white text-sm uppercase tracking-wider font-sans">Discovered Clusters</h2>
                 <button 
                   onClick={() => setSelectedApp("")} 
+                  aria-label="Clear active app filter"
                   className="font-mono text-[10px] text-vault-cyan hover:underline"
                 >
                   Clear filter
@@ -1476,16 +1554,23 @@
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                     placeholder="Search apps..."
+                    aria-label="Search discovered apps"
                     className="w-full rounded-xl bg-black/30 border border-vault-line/40 pl-9 pr-4 py-2.5 text-xs text-white focus:border-vault-cyan outline-none transition"
                   />
-                  <div className="absolute left-3 top-3 text-slate-500">
+                  <div className="absolute left-3 top-3 text-slate-400 pointer-events-none">
                     <Icon name="search" className="w-3.5 h-3.5" />
                   </div>
+                  {query && (
+                    <button onClick={() => setQuery("")} aria-label="Clear app search query" className="absolute right-3 top-3 text-slate-400 hover:text-white">
+                      <Icon name="close" className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
 
                 <select 
                   value={sortBy} 
                   onChange={(event) => setSortBy(event.target.value)} 
+                  aria-label="Sort discovered apps by"
                   className="w-full rounded-xl bg-black/30 border border-vault-line/40 px-3 py-2.5 text-xs text-slate-300 focus:border-vault-cyan outline-none transition cursor-pointer"
                 >
                   <option value="modified">Sort: Modification Date</option>
@@ -1505,7 +1590,7 @@
               )}
 
               {!loading && !allGroups.length && (
-                <div className="mt-6 rounded-xl border border-dashed border-vault-line/40 p-6 text-center text-xs text-slate-500 font-mono">
+                <div className="mt-6 rounded-xl border border-dashed border-vault-line/40 p-6 text-center text-xs text-slate-400 font-mono">
                   No appData folders cataloged yet.
                 </div>
               )}
@@ -1539,7 +1624,7 @@
                       ))}
                     </div>
 
-                    <div className="mt-3.5 border-t border-vault-line/10 pt-2 font-mono text-[9px] text-slate-500">
+                    <div className="mt-3.5 border-t border-vault-line/10 pt-2 font-mono text-[9px] text-slate-400">
                       Modified {formatDate(group.lastModified)}
                     </div>
                   </button>
@@ -1551,12 +1636,18 @@
       }
 
       function BulkToolbar({ files, selectedFiles, selectedCount, progress, onSelectAll, onZip, onCsv, onReport, onDelete }) {
+        const isAllSelected = files.length > 0 && selectedCount === files.length;
         return (
           <div className="glass-panel rounded-2xl p-4 shadow-glow flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <label className="flex items-center gap-2 text-xs font-mono text-slate-300 cursor-pointer select-none">
-                <input type="checkbox" checked={files.length > 0 && selectedCount === files.length} onChange={(event) => onSelectAll(event.target.checked, files.map((file) => file.id))} className="rounded border-vault-line cursor-pointer" />
-                Select All ({selectedCount || files.length} targets)
+                <input 
+                  type="checkbox" 
+                  checked={isAllSelected} 
+                  onChange={(event) => onSelectAll(event.target.checked, files.map((file) => file.id))} 
+                  className="rounded border-vault-line cursor-pointer accent-cyan-500" 
+                />
+                Select All ({selectedCount ? `${selectedCount}/${files.length}` : `${files.length} available`})
               </label>
               
               <div className="flex flex-wrap gap-2">
@@ -1594,11 +1685,77 @@
       }
 
       function FileList({ files, selectedFileId, selectedIds, onSelect, onToggle }) {
+        const [fileSearch, setFileSearch] = useState("");
+        const [mimeFilter, setMimeFilter] = useState("ALL");
+
+        const filteredFiles = useMemo(() => {
+          return files.filter((file) => {
+            const matchesSearch = (file.name || "").toLowerCase().includes(fileSearch.toLowerCase()) ||
+                                  (file.mimeType || "").toLowerCase().includes(fileSearch.toLowerCase());
+            if (!matchesSearch) return false;
+            if (mimeFilter === "ALL") return true;
+            const mime = (file.mimeType || "").toLowerCase();
+            if (mimeFilter === "JSON") return mime.includes("json") || /\.json$/i.test(file.name);
+            if (mimeFilter === "TXT") return mime.startsWith("text/") || /\.(txt|md|csv|log|xml|yaml|yml|ini|cfg)$/i.test(file.name);
+            if (mimeFilter === "IMG") return mime.startsWith("image/");
+            if (mimeFilter === "BIN") return mime.includes("octet") || mime.includes("binary") || /\.(db|sqlite|sqlite3|dat|bin|bak)$/i.test(file.name);
+            return true;
+          });
+        }, [files, fileSearch, mimeFilter]);
+
+        const mimeFilters = ["ALL", "JSON", "TXT", "IMG", "BIN"];
+
         return (
           <div className="glass-panel rounded-2xl p-4 shadow-glow flex flex-col">
-            <h2 className="mb-3 font-bold text-white text-sm uppercase tracking-wider font-sans border-b border-vault-line/10 pb-2.5">Scan Files</h2>
-            <div className="max-h-[calc(100vh-320px)] space-y-2 overflow-auto pr-1 scrollbar-thin">
-              {files.map((file) => {
+            <div className="mb-3 flex items-center justify-between border-b border-vault-line/10 pb-2.5">
+              <h2 className="font-bold text-white text-sm uppercase tracking-wider font-sans">
+                Files <span className="text-vault-cyan font-mono text-xs">({filteredFiles.length}/{files.length})</span>
+              </h2>
+            </div>
+
+            <div className="space-y-2 mb-3">
+              <div className="relative">
+                <input
+                  value={fileSearch}
+                  onChange={(e) => setFileSearch(e.target.value)}
+                  placeholder="Filter files in cluster..."
+                  aria-label="Filter files in cluster"
+                  className="w-full rounded-xl bg-black/30 border border-vault-line/40 pl-8 pr-3 py-1.5 text-xs text-white focus:border-vault-cyan outline-none transition"
+                />
+                <div className="absolute left-2.5 top-2 text-slate-400 pointer-events-none">
+                  <Icon name="search" className="w-3.5 h-3.5" />
+                </div>
+                {fileSearch && (
+                  <button onClick={() => setFileSearch("")} aria-label="Clear file search filter" className="absolute right-2.5 top-2 text-slate-400 hover:text-white">
+                    <Icon name="close" className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {mimeFilters.map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => setMimeFilter(type)}
+                    className={cx(
+                      "rounded px-2 py-0.5 font-mono text-[10px] transition active:scale-95",
+                      mimeFilter === type
+                        ? "bg-vault-cyan/20 text-vault-cyan border border-vault-cyan/40 font-bold"
+                        : "bg-black/20 text-slate-400 border border-vault-line/20 hover:text-white"
+                    )}
+                  >
+                    {type}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="max-h-[calc(100vh-360px)] space-y-2 overflow-auto pr-1 scrollbar-thin">
+              {!filteredFiles.length && (
+                <div className="rounded-xl border border-dashed border-vault-line/30 p-6 text-center text-xs text-slate-400 font-mono">
+                  No files match filter criteria.
+                </div>
+              )}
+              {filteredFiles.map((file) => {
                 const icon = iconForMime(file.mimeType, file.name);
                 const isSelected = selectedFileId === file.id;
                 return (
@@ -1615,17 +1772,18 @@
                       type="checkbox" 
                       checked={selectedIds.has(file.id)} 
                       onChange={() => onToggle(file.id)} 
-                      className="mt-1 rounded border-vault-line/50 cursor-pointer" 
+                      aria-label={`Select ${file.name}`}
+                      className="mt-1 rounded border-vault-line/50 cursor-pointer accent-cyan-500" 
                     />
                     <button onClick={() => onSelect(file.id)} className="min-w-0 flex-1 text-left">
                       <div className="flex items-start gap-2">
                         <span className={cx("rounded px-1.5 py-0.5 font-mono text-[9px] border", icon.color)}>{icon.label}</span>
                         <div className="min-w-0 flex-1">
                           <div className="truncate font-semibold text-white text-xs">{file.name}</div>
-                          <div className="mt-1 truncate font-mono text-[10px] text-slate-500 leading-none">{file.mimeType || "unknown"} · {formatBytes(file.size)}</div>
+                          <div className="mt-1 truncate font-mono text-[10px] text-slate-400 leading-none">{file.mimeType || "unknown"} · {formatBytes(file.size)}</div>
                         </div>
                       </div>
-                      <div className="mt-2.5 font-mono text-[9px] text-slate-500 border-t border-vault-line/5 pt-1.5">
+                      <div className="mt-2.5 font-mono text-[10px] text-slate-400 border-t border-vault-line/5 pt-1.5">
                         Modified {formatDate(file.modifiedTime)}
                       </div>
                     </button>
@@ -1639,7 +1797,7 @@
 
       function Inspector({ state, selectedFile, proxyUrl, onTab, onContent, onNotice }) {
         if (state.activeTab === "analytics") {
-          return <Analytics files={state.files} groups={state.groups} changes={state.changes} />;
+          return <Analytics files={state.files} groups={state.connectedApps} changes={state.changes} />;
         }
         
         if (!selectedFile) {
@@ -1697,7 +1855,7 @@
             <div className="grid gap-3 sm:grid-cols-2">
               {rows.map(([label, value]) => (
                 <div key={label} className="rounded-xl border border-vault-line/10 bg-black/20 p-3.5 relative overflow-hidden group">
-                  <div className="font-mono text-[9px] uppercase tracking-wider text-slate-500">{label}</div>
+                  <div className="font-mono text-[9px] uppercase tracking-wider text-slate-400">{label}</div>
                   <div className="mt-1 break-all text-xs text-slate-200 font-semibold">{value}</div>
                 </div>
               ))}
@@ -1731,7 +1889,7 @@
           <div className="rounded-xl border border-vault-line/10 bg-black/20 p-4">
             <h3 className="mb-3 font-bold text-white text-xs uppercase tracking-wider font-sans">{title}</h3>
             {!entries.length ? (
-              <p className="text-xs text-slate-500 font-mono">No keys declared in metadata headers.</p>
+              <p className="text-xs text-slate-400 font-mono">No keys declared in metadata headers.</p>
             ) : (
               <div className="grid gap-2 sm:grid-cols-2">
                 {entries.map(([key, value]) => (
@@ -1754,6 +1912,14 @@
           setError("");
         }, [file.id]);
 
+        useEffect(() => {
+          return () => {
+            if (cached?.url) {
+              URL.revokeObjectURL(cached.url);
+            }
+          };
+        }, [file.id]);
+
         async function loadContent(force = false) {
           if (cached && !force) return;
           if (Number(file.size || 0) > 10 * 1024 * 1024 && !confirm(`${file.name} is larger than 10MB. Download content for preview anyway?`)) return;
@@ -1764,6 +1930,7 @@
             const arrayBuffer = await blob.arrayBuffer();
             const isText = isTextFile(file);
             const text = isText ? await blob.text() : "";
+            if (cached?.url) URL.revokeObjectURL(cached.url);
             const content = {
               blob,
               arrayBuffer,
@@ -1781,10 +1948,12 @@
 
         async function saveFile() {
           const activeBlob = cached?.blob || await downloadBlob(token, file.id);
+          const url = URL.createObjectURL(activeBlob);
           const a = document.createElement("a");
-          a.href = URL.createObjectURL(activeBlob);
+          a.href = url;
           a.download = safeName(file.name);
           a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 3000);
           onNotice("File download started.");
         }
 
@@ -1809,7 +1978,7 @@
             </div>
             {error && <div className="rounded-xl border border-vault-red/30 bg-vault-red/10 p-4 text-xs text-red-200">{error}</div>}
             {!cached && !loading && (
-              <div className="rounded-xl border border-dashed border-vault-line/40 p-10 text-center text-xs text-slate-500 font-mono">
+              <div className="rounded-xl border border-dashed border-vault-line/40 p-10 text-center text-xs text-slate-400 font-mono">
                 Payload not requested. Click "Load Payload" to fetch.
               </div>
             )}
@@ -1852,7 +2021,7 @@
             </div>
             <div>
               <div className="font-bold text-red-200 text-xs uppercase tracking-wider">Heuristics: Privacy Vulnerability</div>
-              <p className="mt-1 text-xs text-slate-400 leading-normal">
+              <p className="mt-1 text-xs text-slate-300 leading-normal">
                 Extracted content elements match sensitive forensic keys: <span className="text-red-300 font-mono font-semibold">{Array.from(new Set(signals)).join(", ")}</span>. These vectors should be verified.
               </p>
             </div>
@@ -1860,57 +2029,144 @@
         );
       }
 
-      function CodeBlock({ language, value, height }) {
-        const ref = useRef(null);
+      function CodeBlock({ language, value, height = "300px" }) {
+        const containerRef = useRef(null);
         const editorRef = useRef(null);
+        const [monacoLoaded, setMonacoLoaded] = useState(false);
+
         useEffect(() => {
           let disposed = false;
-          window.require.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.49.0/min/vs" } });
-          window.require(["vs/editor/editor.main"], () => {
-            if (disposed || !ref.current) return;
-            if (editorRef.current) editorRef.current.dispose();
-            editorRef.current = monaco.editor.create(ref.current, {
-              value,
-              language,
-              readOnly: true,
-              minimap: { enabled: false },
-              theme: "vs-dark",
-              automaticLayout: true,
-              wordWrap: "on",
-              fontFamily: "JetBrains Mono",
-              fontSize: 12,
-              scrollBeyondLastLine: false,
-            });
-          });
+          const initMonaco = () => {
+            if (window.monaco?.editor) {
+              if (!disposed && containerRef.current && !editorRef.current) {
+                editorRef.current = window.monaco.editor.create(containerRef.current, {
+                  value: value || "",
+                  language: language || "plaintext",
+                  readOnly: true,
+                  minimap: { enabled: false },
+                  theme: "vs-dark",
+                  automaticLayout: true,
+                  wordWrap: "on",
+                  fontFamily: "JetBrains Mono, monospace",
+                  fontSize: 12,
+                  scrollBeyondLastLine: false,
+                });
+                setMonacoLoaded(true);
+              }
+            } else if (window.require) {
+              try {
+                window.require.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.49.0/min/vs" } });
+                window.require(["vs/editor/editor.main"], () => {
+                  if (!disposed && containerRef.current && !editorRef.current) {
+                    editorRef.current = window.monaco.editor.create(containerRef.current, {
+                      value: value || "",
+                      language: language || "plaintext",
+                      readOnly: true,
+                      minimap: { enabled: false },
+                      theme: "vs-dark",
+                      automaticLayout: true,
+                      wordWrap: "on",
+                      fontFamily: "JetBrains Mono, monospace",
+                      fontSize: 12,
+                      scrollBeyondLastLine: false,
+                    });
+                    setMonacoLoaded(true);
+                  }
+                });
+              } catch (e) {
+                console.warn("Monaco initialization deferred or fallback active", e);
+              }
+            }
+          };
+
+          initMonaco();
+
           return () => {
             disposed = true;
-            editorRef.current?.dispose();
+            if (editorRef.current) {
+              editorRef.current.dispose();
+              editorRef.current = null;
+            }
           };
-        }, [language, value]);
-        return <div ref={ref} style={{ height }} className="overflow-hidden rounded-xl border border-vault-line/30" />;
+        }, []);
+
+        useEffect(() => {
+          if (editorRef.current && window.monaco) {
+            const model = editorRef.current.getModel();
+            if (model) {
+              if (editorRef.current.getValue() !== (value || "")) {
+                editorRef.current.setValue(value || "");
+              }
+              window.monaco.editor.setModelLanguage(model, language || "plaintext");
+            }
+          }
+        }, [value, language]);
+
+        return (
+          <div style={{ height }} className="relative overflow-hidden rounded-xl border border-vault-line/30 bg-[#1e1e1e]">
+            <div ref={containerRef} className="h-full w-full" />
+            {!monacoLoaded && (
+              <pre className="absolute inset-0 overflow-auto p-4 font-mono text-xs text-slate-300 leading-relaxed scrollbar-thin">
+                <code>{value}</code>
+              </pre>
+            )}
+          </div>
+        );
       }
 
       function HexViewer({ buffer }) {
-        const bytes = new Uint8Array(buffer || new ArrayBuffer(0));
-        const lines = [];
-        for (let offset = 0; offset < Math.min(bytes.length, 1024 * 1024); offset += 16) {
-          const slice = bytes.slice(offset, offset + 16);
-          const hex = Array.from(slice).map((byte) => byte.toString(16).padStart(2, "0")).join(" ");
-          const ascii = Array.from(slice).map((byte) => (byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : ".")).join("");
-          lines.push({ offset, hex, ascii });
-        }
+        const [renderedCount, setRenderedCount] = useState(512); // Windowed rendering to prevent DOM freeze
+        const bytes = useMemo(() => new Uint8Array(buffer || new ArrayBuffer(0)), [buffer]);
+        const totalLines = Math.ceil(bytes.length / 16);
+
+        const lines = useMemo(() => {
+          const list = [];
+          const limit = Math.min(renderedCount * 16, bytes.length);
+          for (let offset = 0; offset < limit; offset += 16) {
+            const slice = bytes.slice(offset, offset + 16);
+            const hex = Array.from(slice).map((byte) => byte.toString(16).padStart(2, "0")).join(" ");
+            const ascii = Array.from(slice).map((byte) => (byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : ".")).join("");
+            list.push({ offset, hex, ascii });
+          }
+          return list;
+        }, [bytes, renderedCount]);
+
         return (
-          <div className="max-h-[500px] overflow-auto rounded-xl border border-vault-line/20 bg-black/40 p-4 font-mono text-xs scrollbar-thin">
-            <div className="mb-3 text-[10px] text-slate-500 uppercase tracking-widest">Hex dump preview ({formatBytes(Math.min(bytes.length, 1024 * 1024))})</div>
-            <div className="space-y-1">
-              {lines.map((line) => (
-                <div key={line.offset} className="grid grid-cols-[80px_1fr_140px] gap-4 py-0.5 hover:bg-white/5 rounded px-1 transition duration-100">
-                  <span className="text-vault-cyan/80">{line.offset.toString(16).padStart(8, "0")}</span>
-                  <span className="text-slate-300 select-all">{line.hex}</span>
-                  <span className="text-vault-green select-none border-l border-vault-line/10 pl-3">{line.ascii}</span>
-                </div>
-              ))}
+          <div className="space-y-2">
+            <div className="max-h-[500px] overflow-auto rounded-xl border border-vault-line/20 bg-black/40 p-4 font-mono text-xs scrollbar-thin">
+              <div className="mb-3 flex justify-between items-center text-[10px] text-slate-400 uppercase tracking-widest border-b border-vault-line/10 pb-2">
+                <span>Hex dump preview ({formatBytes(bytes.length)})</span>
+                <span>Showing {lines.length} of {totalLines} lines</span>
+              </div>
+              <div className="space-y-1">
+                {lines.map((line) => (
+                  <div key={line.offset} className="grid grid-cols-[80px_1fr_140px] gap-4 py-0.5 hover:bg-white/5 rounded px-1 transition duration-100">
+                    <span className="text-vault-cyan/80 select-none">{line.offset.toString(16).padStart(8, "0")}</span>
+                    <span className="text-slate-300 select-all font-medium">{line.hex}</span>
+                    <span className="text-vault-green select-none border-l border-vault-line/10 pl-3">{line.ascii}</span>
+                  </div>
+                ))}
+              </div>
             </div>
+            {renderedCount < totalLines && (
+              <div className="flex justify-between items-center rounded-xl bg-black/20 border border-vault-line/20 p-2.5 text-xs text-slate-400 font-mono">
+                <span>{totalLines - renderedCount} remaining lines not loaded into DOM.</span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setRenderedCount((prev) => Math.min(totalLines, prev + 512))}
+                    className="rounded-lg bg-vault-cyan/15 hover:bg-vault-cyan/25 border border-vault-cyan/30 px-3 py-1 text-vault-cyan font-semibold transition active:scale-95"
+                  >
+                    + Load 512 Lines
+                  </button>
+                  <button
+                    onClick={() => setRenderedCount(totalLines)}
+                    className="rounded-lg border border-vault-line/40 hover:bg-white/5 px-3 py-1 text-slate-300 transition active:scale-95"
+                  >
+                    Load All
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         );
       }
@@ -1927,6 +2183,7 @@
           if (Number(file.size || 0) > 10 * 1024 * 1024 && !confirm(`${file.name} is larger than 10MB. Download for analysis anyway?`)) return "";
           const blob = await downloadBlob(token, file.id);
           const text = await blob.text();
+          if (cached?.url) URL.revokeObjectURL(cached.url);
           onContent(file.id, { blob, arrayBuffer: await blob.arrayBuffer(), url: URL.createObjectURL(blob), text, signals: scanContent(text) });
           return text;
         }
@@ -1951,24 +2208,62 @@
               return;
             }
 
-            const prompt = `Analyze this Google Drive file that appears associated with an app. Explain what app likely wrote it, what user data it contains, what purpose it serves, and any privacy concerns. Be concise and specific.\n\nFilename: ${file.name}\nMIME type: ${file.mimeType || "unknown"}\nMetadata:\n${JSON.stringify(file, null, 2)}\n\nContent excerpt:\n${text.slice(0, 8000)}`;
+            const prompt = `Analyze this Google Drive file associated with an app. Explain what app likely wrote it, what user data it contains, what purpose it serves, and any privacy concerns. Be concise and specific.\n\nFilename: ${file.name}\nMIME: ${file.mimeType || "unknown"}\n\n<file_metadata>\n${JSON.stringify(file, null, 2)}\n</file_metadata>\n\n<file_content>\n${text.slice(0, 8000)}\n</file_content>`;
+            
             const res = await fetch(proxyUrl, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 model: "claude-sonnet-4-20250514",
                 stream: true,
-                system: "You are a privacy and data forensics expert. Analyze this file from a user's Google Drive that was created by or associated with a third-party app. Explain what app likely wrote it, what user data it contains, what purpose it serves, and any privacy concerns.",
+                system: "You are a privacy and data forensics expert. Analyze this file from a user's Google Drive. Explain what app wrote it, what data it contains, and any security/privacy risks.",
                 prompt,
               }),
             });
             if (!res.ok || !res.body) throw new Error(await res.text());
+            
             const reader = res.body.getReader();
             const decoder = new TextDecoder();
+            let accumulated = "";
+            let buffer = "";
+
             while (true) {
               const { done, value } = await reader.read();
               if (done) break;
-              setOutput((current) => current + decoder.decode(value, { stream: true }));
+              buffer += decoder.decode(value, { stream: true });
+              
+              if (buffer.includes("data:")) {
+                const lines = buffer.split("\n");
+                buffer = lines.pop() || "";
+                for (const line of lines) {
+                  const trimmed = line.trim();
+                  if (trimmed.startsWith("data:")) {
+                    const dataStr = trimmed.slice(5).trim();
+                    if (dataStr === "[DONE]") continue;
+                    try {
+                      const json = JSON.parse(dataStr);
+                      const chunkText = json.delta?.text || json.completion || json.choices?.[0]?.delta?.content || json.text || "";
+                      if (chunkText) {
+                        accumulated += chunkText;
+                        setOutput(accumulated);
+                      }
+                    } catch {
+                      if (dataStr) {
+                        accumulated += dataStr + "\n";
+                        setOutput(accumulated);
+                      }
+                    }
+                  }
+                }
+              } else {
+                accumulated += buffer;
+                buffer = "";
+                setOutput(accumulated);
+              }
+            }
+            if (buffer && !buffer.includes("data:")) {
+              accumulated += buffer;
+              setOutput(accumulated);
             }
           } catch (error) {
             setError(error.message);
@@ -2088,7 +2383,7 @@
             
             <div className="rounded-2xl border border-vault-line/15 bg-black/20 p-4">
               <h3 className="mb-3 font-bold text-white text-xs uppercase tracking-wider font-sans border-b border-vault-line/10 pb-2.5">File Updates Heatmap</h3>
-              <Timeline files={files} changes={changes} />
+              <Timeline files={files} />
             </div>
           </div>
         );
@@ -2096,52 +2391,75 @@
 
       function ChartCard({ type, title, labels, data }) {
         const ref = useRef(null);
+        const chartRef = useRef(null);
+
         useEffect(() => {
           if (!ref.current) return;
-          const chart = new Chart(ref.current, {
-            type,
-            data: {
-              labels,
-              datasets: [{
-                data,
-                backgroundColor: [
-                  "#06b6d4", // cyan
-                  "#10b981", // emerald
-                  "#f59e0b", // amber
-                  "#f43f5e", // rose
-                  "#8b5cf6", // violet
-                  "#14b8a6", // teal
-                  "#3b82f6", // blue
-                ],
-                borderColor: "#0a0f18",
-                borderWidth: 2,
-              }],
-            },
-            options: {
-              responsive: true,
-              maintainAspectRatio: false,
-              plugins: { 
-                legend: { 
-                  position: "right",
-                  labels: { 
-                    color: "#cbd5e1",
-                    font: { family: "Space Grotesk", size: 10 }
-                  } 
-                } 
+          if (chartRef.current) {
+            chartRef.current.destroy();
+            chartRef.current = null;
+          }
+          if (!labels.length) return;
+
+          try {
+            chartRef.current = new Chart(ref.current, {
+              type,
+              data: {
+                labels,
+                datasets: [{
+                  data,
+                  backgroundColor: [
+                    "#06b6d4", // cyan
+                    "#10b981", // emerald
+                    "#f59e0b", // amber
+                    "#f43f5e", // rose
+                    "#8b5cf6", // violet
+                    "#14b8a6", // teal
+                    "#3b82f6", // blue
+                  ],
+                  borderColor: "#0a0f18",
+                  borderWidth: 2,
+                }],
               },
-              scales: type === "bar" ? { 
-                x: { grid: { color: "rgba(255,255,255,0.03)" }, ticks: { color: "#94a3b8", font: { family: "Space Grotesk" } } }, 
-                y: { grid: { color: "rgba(255,255,255,0.03)" }, ticks: { color: "#94a3b8", font: { family: "Space Grotesk" } } } 
-              } : undefined,
-            },
-          });
-          return () => chart.destroy();
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { 
+                  legend: { 
+                    position: "right",
+                    labels: { 
+                      color: "#cbd5e1",
+                      font: { family: "Space Grotesk", size: 10 }
+                    } 
+                  } 
+                },
+                scales: type === "bar" ? { 
+                  x: { grid: { color: "rgba(255,255,255,0.03)" }, ticks: { color: "#94a3b8", font: { family: "Space Grotesk" } } }, 
+                  y: { grid: { color: "rgba(255,255,255,0.03)" }, ticks: { color: "#94a3b8", font: { family: "Space Grotesk" } } } 
+                } : undefined,
+              },
+            });
+          } catch (e) {
+            console.warn("Chart creation error", e);
+          }
+
+          return () => {
+            if (chartRef.current) {
+              chartRef.current.destroy();
+              chartRef.current = null;
+            }
+          };
         }, [type, JSON.stringify(labels), JSON.stringify(data)]);
+
         return (
           <div className="rounded-2xl border border-vault-line/15 bg-black/20 p-4 flex flex-col">
             <h3 className="mb-3 font-bold text-white text-xs uppercase tracking-wider font-sans border-b border-vault-line/10 pb-2.5">{title}</h3>
-            <div className="h-60 relative w-full">
-              <canvas ref={ref}></canvas>
+            <div className="h-60 relative w-full flex items-center justify-center">
+              {!labels.length ? (
+                <p className="text-xs text-slate-500 font-mono">No cluster data available for visualization.</p>
+              ) : (
+                <canvas ref={ref}></canvas>
+              )}
             </div>
           </div>
         );
@@ -2172,8 +2490,8 @@
         return (
           <div className="space-y-3 max-h-[400px] overflow-auto pr-1 scrollbar-thin">
             {!changes.length && (
-              <div className="rounded-xl border border-dashed border-vault-line/40 p-8 text-center text-xs text-slate-500 font-mono">
-                Diagnostics monitoring active. Polling frequency: 30s. No events captured.
+              <div className="rounded-xl border border-dashed border-vault-line/40 p-8 text-center text-xs text-slate-400 font-mono">
+                Diagnostics monitoring active. Polling frequency: 30s. No events captured yet.
               </div>
             )}
             {changes.map((change, index) => (
@@ -2189,7 +2507,7 @@
                       {change.type.toUpperCase()}
                     </span>
                     <h3 className="mt-2.5 font-bold text-white text-xs truncate">{change.file.name}</h3>
-                    <p className="mt-1 font-mono text-[10px] text-slate-500 truncate">{change.file.id}</p>
+                    <p className="mt-1 font-mono text-[10px] text-slate-400 truncate">{change.file.id}</p>
                   </div>
                   <div className="text-right text-[10px] text-slate-400 font-mono shrink-0">{formatDate(change.at)}</div>
                 </div>
@@ -2205,7 +2523,7 @@
           Medium: "border-vault-amber/20 bg-vault-amber/10 text-vault-amber",
           High: "border-vault-red/20 bg-vault-red/10 text-vault-red shadow-redGlow animate-pulse",
         };
-        return <span className={cx("rounded-full border px-2.5 py-0.5 font-mono text-[9px] font-bold shrink-0", styles[risk])}>{risk}</span>;
+        return <span className={cx("rounded-full border px-2.5 py-0.5 font-mono text-[9px] font-bold shrink-0", styles[risk] || styles.Low)}>{risk}</span>;
       }
 
       function Logo({ size }) {
@@ -2222,7 +2540,7 @@
         );
       }
 
-      function Toast({ tone, message, onClose }) {
+      function Toast({ tone, message, onClose, onAction, actionLabel }) {
         return (
           <div className={cx(
             "fixed right-4 top-20 z-50 max-w-md rounded-xl border p-4 shadow-glow flex items-start justify-between gap-4 animate-fade-in", 
@@ -2234,9 +2552,19 @@
               <div className="mt-0.5">
                 <Icon name={tone === "error" ? "shield" : "info"} className="w-4 h-4" />
               </div>
-              <p className="text-xs font-medium leading-relaxed">{message}</p>
+              <div>
+                <p className="text-xs font-medium leading-relaxed">{message}</p>
+                {onAction && actionLabel && (
+                  <button
+                    onClick={onAction}
+                    className="mt-2.5 rounded-lg bg-vault-cyan px-3 py-1.5 text-xs font-bold text-slate-950 shadow-glow transition hover:bg-vault-cyan/80 active:scale-95"
+                  >
+                    {actionLabel}
+                  </button>
+                )}
+              </div>
             </div>
-            <button onClick={onClose} className="text-slate-400 hover:text-white shrink-0">
+            <button onClick={onClose} aria-label="Close notification" className="text-slate-400 hover:text-white shrink-0">
               <Icon name="close" className="w-4 h-4" />
             </button>
           </div>
@@ -2245,10 +2573,12 @@
 
       function downloadText(filename, text, type = "text/plain") {
         const blob = new Blob([text], { type });
+        const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
+        a.href = url;
         a.download = filename;
         a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
       }
 
       function exportCsv(files) {
@@ -2257,32 +2587,38 @@
         downloadText("drivevault-metadata.csv", [header.join(","), ...rows].join("\n"), "text/csv");
       }
 
-      async function bulkZip(state, dispatch) {
-        const targets = state.selectedIds.size ? state.files.filter((file) => state.selectedIds.has(file.id)) : state.files;
+      async function bulkZip(state, dispatch, fallbackFiles = state.files) {
+        const targets = state.selectedIds.size ? state.files.filter((file) => state.selectedIds.has(file.id)) : fallbackFiles;
         if (!targets.length) return;
         const zip = new JSZip();
         const limiter = createLimiter(5);
         dispatch({ type: "PROGRESS", progress: { label: "Downloading payload packages", done: 0, total: targets.length } });
         let done = 0;
         await Promise.all(targets.map((file) => limiter(async () => {
-          const blob = await downloadBlob(state.token, file.id);
-          zip.file(safeName(file.name), blob);
-          zip.file(`${safeName(file.name)}.metadata.json`, JSON.stringify(file, null, 2));
+          try {
+            const blob = await downloadBlob(state.token, file.id);
+            zip.file(safeName(file.name), blob);
+            zip.file(`${safeName(file.name)}.metadata.json`, JSON.stringify(file, null, 2));
+          } catch (e) {
+            zip.file(`${safeName(file.name)}.error.txt`, `Download error: ${e.message}`);
+          }
           done += 1;
           dispatch({ type: "PROGRESS", progress: { label: "Downloading payload packages", done, total: targets.length } });
         })));
         zip.file("metadata.json", JSON.stringify(targets, null, 2));
         dispatch({ type: "PROGRESS", progress: { label: "Assembling zip archive", done: targets.length, total: targets.length } });
         const blob = await zip.generateAsync({ type: "blob" });
+        const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
+        a.href = url;
         a.download = "drivevault-export.zip";
         a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
         dispatch({ type: "PROGRESS", progress: null });
       }
 
-      async function exportReport(state, dispatch) {
-        const targets = state.selectedIds.size ? state.files.filter((file) => state.selectedIds.has(file.id)) : state.files;
+      async function exportReport(state, dispatch, fallbackFiles = state.files) {
+        const targets = state.selectedIds.size ? state.files.filter((file) => state.selectedIds.has(file.id)) : fallbackFiles;
         const limiter = createLimiter(5);
         let done = 0;
         const report = [];
@@ -2290,8 +2626,12 @@
         await Promise.all(targets.map((file) => limiter(async () => {
           const entry = { metadata: file, textBase64: null };
           if (isTextFile(file) && Number(file.size || 0) < 2 * 1024 * 1024) {
-            const blob = await downloadBlob(state.token, file.id);
-            entry.textBase64 = await blobToBase64(blob);
+            try {
+              const blob = await downloadBlob(state.token, file.id);
+              entry.textBase64 = await blobToBase64(blob);
+            } catch (e) {
+              entry.error = e.message;
+            }
           }
           report.push(entry);
           done += 1;
